@@ -859,13 +859,13 @@ class UnetUpsampler(torch.nn.Module):
         return rgb, []
 
 
-
 def pad_image(image, chunk_size=64):
     h, w = image.shape[1:3]
     h_pad = chunk_size - (h % chunk_size) if h % chunk_size != 0 else 0
     w_pad = chunk_size - (w % chunk_size) if w % chunk_size != 0 else 0
     padding = (0, w_pad, 0, h_pad)  # Padding for the bottom and right sides
     return transforms.Pad(padding, fill=0)(image), h_pad, w_pad
+
 
 def tile_image(image, chunk_size=64):
     c, h, w = image.shape
@@ -874,7 +874,11 @@ def tile_image(image, chunk_size=64):
     tiles = []
     for i in range(h_chunks):
         for j in range(w_chunks):
-            tile = image[:, i * chunk_size:(i + 1) * chunk_size, j * chunk_size:(j + 1) * chunk_size]
+            tile = image[
+                :,
+                i * chunk_size : (i + 1) * chunk_size,
+                j * chunk_size : (j + 1) * chunk_size,
+            ]
             tiles.append(tile)
     return tiles, h_chunks, w_chunks
 
@@ -883,6 +887,20 @@ class AuraSR:
     def __init__(self, config: dict[str, Any], device: str = "cuda"):
         self.upsampler = UnetUpsampler(**config).to(device)
         self.input_image_size = config["input_image_size"]
+
+    @classmethod
+    def from_pretrained(cls, model_id: str = "fal-ai/AuraSR"):
+        import json
+        import torch
+        from pathlib import Path
+        from huggingface_hub import snapshot_download
+
+        hf_model_path = Path(snapshot_download(model_id))
+        config = json.loads((hf_model_path / "config.json").read_text())
+        model = cls(config)
+        checkpoint = torch.load(hf_model_path / "model.ckpt")
+        model.upsampler.load_state_dict(checkpoint, strict=True)
+        return model
 
     @torch.no_grad()
     def upscale_4x(self, image: Image.Image, max_batch_size=8) -> Image.Image:
@@ -896,21 +914,33 @@ class AuraSR:
 
         # Batch processing of tiles
         num_tiles = len(tiles)
-        batches = [tiles[i:i + max_batch_size] for i in range(0, num_tiles, max_batch_size)]
+        batches = [
+            tiles[i : i + max_batch_size] for i in range(0, num_tiles, max_batch_size)
+        ]
         reconstructed_tiles = []
 
         for batch in batches:
             model_input = torch.stack(batch).to(device)
             generator_output = self.upsampler(
                 lowres_image=model_input,
-                noise=torch.randn(model_input.shape[0], 128, device=device)
+                noise=torch.randn(model_input.shape[0], 128, device=device),
             )
-            raw_pixels = (generator_output.clamp_(0, 1).detach().cpu().numpy() * 255).astype(np.uint8)
-            images = [Image.fromarray(pixels.transpose(1, 2, 0)) for pixels in raw_pixels]
+            raw_pixels = (
+                generator_output.clamp_(0, 1).detach().cpu().numpy() * 255
+            ).astype(np.uint8)
+            images = [
+                Image.fromarray(pixels.transpose(1, 2, 0)) for pixels in raw_pixels
+            ]
             reconstructed_tiles.extend(images)
 
         # Reconstruct the full image
-        full_image = Image.new('RGB', (w_chunks * self.input_image_size * 4 - w_pad * 4, h_chunks * self.input_image_size * 4 - h_pad * 4))
+        full_image = Image.new(
+            "RGB",
+            (
+                w_chunks * self.input_image_size * 4 - w_pad * 4,
+                h_chunks * self.input_image_size * 4 - h_pad * 4,
+            ),
+        )
         for i, img in enumerate(reconstructed_tiles):
             x = (i % w_chunks) * self.input_image_size * 4
             y = (i // w_chunks) * self.input_image_size * 4
