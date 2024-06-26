@@ -3,7 +3,7 @@ from setuptools import setup
 
 setup(
     name="aura-sr",
-    version="0.0.1",
+    version="0.0.2",
     description="GAN-based Super-Resolution for real-world images, a variation of the GigaGAN paper.",
     py_modules=["aura_sr"],
     install_requires=[
