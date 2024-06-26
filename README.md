@@ -1,4 +1,6 @@
 # AuraSR
+![aurasr example](https://storage.googleapis.com/falserverless/gallery/aurasr-animated.webp)
+
 GAN-based Super-Resolution for real-world images, a variation of the [GigaGAN](https://mingukkang.github.io/GigaGAN/) paper for image-conditioned upscaling. Torch implementation is based on the unofficial [lucidrains/gigagan-pytorch](https://github.com/lucidrains/gigagan-pytorch) repository.
 
 ## Usage
