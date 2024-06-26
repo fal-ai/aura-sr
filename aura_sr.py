@@ -2,7 +2,6 @@
 # based on the unofficial lucidrains/gigagan-pytorch repository. Heavily modified from there.
 #
 # https://mingukkang.github.io/GigaGAN/
-import numpy as np
 from math import log2, ceil
 from functools import partial
 from typing import Any, Optional, List, Iterable
@@ -708,14 +707,6 @@ class UnetUpsampler(torch.nn.Module):
         return rgb, []
 
 
-def pad_image(image, chunk_size=64):
-    h, w = image.shape[1:3]
-    h_pad = chunk_size - (h % chunk_size) if h % chunk_size != 0 else 0
-    w_pad = chunk_size - (w % chunk_size) if w % chunk_size != 0 else 0
-    padding = (0, w_pad, 0, h_pad)  # Padding for the bottom and right sides
-    return transforms.Pad(padding, fill=0)(image), h_pad, w_pad
-
-
 def tile_image(image, chunk_size=64):
     c, h, w = image.shape
     h_chunks = ceil(h / chunk_size)
@@ -723,13 +714,32 @@ def tile_image(image, chunk_size=64):
     tiles = []
     for i in range(h_chunks):
         for j in range(w_chunks):
-            tile = image[
-                :,
-                i * chunk_size : (i + 1) * chunk_size,
-                j * chunk_size : (j + 1) * chunk_size,
-            ]
+            tile = image[:, i * chunk_size:(i + 1) * chunk_size, j * chunk_size:(j + 1) * chunk_size]
             tiles.append(tile)
     return tiles, h_chunks, w_chunks
+
+
+def merge_tiles(tiles, h_chunks, w_chunks, chunk_size=64):
+    # Determine the shape of the output tensor
+    c = tiles[0].shape[0]
+    h = h_chunks * chunk_size
+    w = w_chunks * chunk_size
+
+    # Create an empty tensor to hold the merged image
+    merged = torch.zeros((c, h, w), dtype=tiles[0].dtype)
+
+    # Iterate over the tiles and place them in the correct position
+    for idx, tile in enumerate(tiles):
+        i = idx // w_chunks
+        j = idx % w_chunks
+
+        h_start = i * chunk_size
+        w_start = j * chunk_size
+
+        tile_h, tile_w = tile.shape[1:]
+        merged[:, h_start:h_start+tile_h, w_start:w_start+tile_w] = tile
+
+    return merged
 
 
 class AuraSR:
@@ -752,47 +762,35 @@ class AuraSR:
         return model
 
     @torch.no_grad()
-    def upscale_4x(self, image: Image.Image, max_batch_size=1) -> Image.Image:
+    def upscale_4x(self, image: Image.Image, max_batch_size=8) -> Image.Image:
         tensor_transform = transforms.ToTensor()
         device = self.upsampler.device
 
-        image_tensor = tensor_transform(image)
-        padded_tensor, h_pad, w_pad = pad_image(image_tensor)
+        image_tensor = tensor_transform(image).unsqueeze(0)
+        _, _, h, w = image_tensor.shape
+        pad_h = (self.input_image_size - h % self.input_image_size) % self.input_image_size
+        pad_w = (self.input_image_size - w % self.input_image_size) % self.input_image_size
 
-        tiles, h_chunks, w_chunks = tile_image(padded_tensor, self.input_image_size)
+        # Pad the image
+        image_tensor = torch.nn.functional.pad(image_tensor, (0, pad_w, 0, pad_h), mode='reflect').squeeze(0)
+        tiles, h_chunks, w_chunks = tile_image(image_tensor, self.input_image_size)
 
         # Batch processing of tiles
         num_tiles = len(tiles)
-        batches = [
-            tiles[i : i + max_batch_size] for i in range(0, num_tiles, max_batch_size)
-        ]
+        batches = [tiles[i:i + max_batch_size] for i in range(0, num_tiles, max_batch_size)]
         reconstructed_tiles = []
 
         for batch in batches:
             model_input = torch.stack(batch).to(device)
             generator_output = self.upsampler(
                 lowres_image=model_input,
-                noise=torch.randn(model_input.shape[0], 128, device=device),
+                noise=torch.randn(model_input.shape[0], 128, device=device)
             )
-            raw_pixels = (
-                generator_output.clamp_(0, 1).detach().cpu().numpy() * 255
-            ).astype(np.uint8)
-            images = [
-                Image.fromarray(pixels.transpose(1, 2, 0)) for pixels in raw_pixels
-            ]
-            reconstructed_tiles.extend(images)
+            reconstructed_tiles.extend(list(generator_output.clamp_(0, 1).detach().cpu()))
 
-        # Reconstruct the full image
-        full_image = Image.new(
-            "RGB",
-            (
-                w_chunks * self.input_image_size * 4 - w_pad * 4,
-                h_chunks * self.input_image_size * 4 - h_pad * 4,
-            ),
-        )
-        for i, img in enumerate(reconstructed_tiles):
-            x = (i % w_chunks) * self.input_image_size * 4
-            y = (i // w_chunks) * self.input_image_size * 4
-            full_image.paste(img, (x, y))
+        merged_tensor = merge_tiles(reconstructed_tiles, h_chunks, w_chunks, self.input_image_size * 4)
+        unpadded = merged_tensor[:, :h * 4, :w * 4]
 
-        return full_image
+        to_pil = transforms.ToPILImage()
+        return to_pil(unpadded)
+
