@@ -748,7 +748,7 @@ class AuraSR:
         self.input_image_size = config["input_image_size"]
 
     @classmethod
-    def from_pretrained(cls, model_id: str = "fal-ai/AuraSR"):
+    def from_pretrained(cls, model_id: str = "fal-ai/AuraSR", use_safetensors: bool = True):
         import json
         import torch
         from pathlib import Path
@@ -757,7 +757,20 @@ class AuraSR:
         hf_model_path = Path(snapshot_download(model_id))
         config = json.loads((hf_model_path / "config.json").read_text())
         model = cls(config)
-        checkpoint = torch.load(hf_model_path / "model.ckpt")
+
+        if use_safetensors:
+            try:
+                from safetensors.torch import load_file
+                checkpoint = load_file(hf_model_path / "model.safetensors")
+            except ImportError:
+                raise ImportError(
+                    "The safetensors library is not installed. "
+                    "Please install it with `pip install safetensors` "
+                    "or use `use_safetensors=False` to load the model with PyTorch."
+                )
+        else:
+            checkpoint = torch.load(hf_model_path / "model.ckpt")
+
         model.upsampler.load_state_dict(checkpoint, strict=True)
         return model
 
