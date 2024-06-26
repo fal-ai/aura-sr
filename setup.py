@@ -12,6 +12,7 @@ setup(
         "numpy",
         "einops",
         "huggingface_hub",
+        "safetensors"
     ],
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
