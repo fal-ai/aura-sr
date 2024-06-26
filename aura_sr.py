@@ -3,14 +3,12 @@
 #
 # https://mingukkang.github.io/GigaGAN/
 import numpy as np
-from math import log2
+from math import log2, ceil
 from functools import partial
-from typing import Optional, List, Iterable
+from typing import Any, Optional, List, Iterable
 
 import torch
 from torchvision import transforms
-from math import ceil
-from typing import Any
 from PIL import Image
 from torch import nn, einsum, Tensor
 import torch.nn.functional as F
@@ -903,7 +901,7 @@ class AuraSR:
         return model
 
     @torch.no_grad()
-    def upscale_4x(self, image: Image.Image, max_batch_size=8) -> Image.Image:
+    def upscale_4x(self, image: Image.Image, max_batch_size=1) -> Image.Image:
         tensor_transform = transforms.ToTensor()
         device = self.upsampler.device
 
