@@ -159,37 +159,6 @@ class Attend(nn.Module):
         return out
 
 
-class ASAP_padding_one(nn.Module):
-    # pooling trough selecting only the low frequent part in the fourier domain and only using this part to go back into the spatial domain
-    # save computations as we do not need to do the downsampling trough conv with stride 2
-    # using a hamming window to prevent sinc-interpolation artifacts
-    def __init__(self):
-        self.window2d = None
-        super().__init__()
-
-    def forward(self, x):
-
-        x = F.pad(x, (0, 1, 0, 1), "constant", 0)
-        if not torch.is_tensor(self.window2d):
-            window1d = np.abs(np.hamming(x.size(2)))
-            window2d = np.sqrt(np.outer(window1d, window1d))
-            self.window2d = torch.Tensor(window2d).cuda()
-            del window1d
-            del window2d
-
-        low_part = torch.fft.fftshift(torch.fft.fft2(x, norm="forward"))
-        low_part = low_part * self.window2d.unsqueeze(0).unsqueeze(0)
-        low_part = low_part[
-            :,
-            :,
-            int(x.size()[2] / 4) : int(x.size()[2] / 4 * 3),
-            int(x.size()[3] / 4) : int(x.size()[3] / 4 * 3),
-        ]
-
-        fc = torch.fft.ifft2(torch.fft.ifftshift(low_part), norm="forward").real
-        return fc
-
-
 def exists(x):
     return x is not None
 
@@ -218,47 +187,6 @@ def null_iterator():
     while True:
         yield None
 
-
-# small helper modules
-class TransposedConvUpsample(nn.Module):
-    def __init__(self, in_channels, out_channels, scale_factor):
-        super().__init__()
-        self.upsample = nn.ConvTranspose2d(
-            in_channels,
-            out_channels,
-            kernel_size=scale_factor,
-            stride=scale_factor,
-            padding=0,
-            output_padding=0,
-        )
-
-    def forward(self, x):
-        return self.upsample(x)
-
-
-class PixelShuffleUpsample(nn.Module):
-    def __init__(self, dim, dim_out=None):
-        super().__init__()
-        dim_out = default(dim_out, dim)
-
-        conv = nn.Conv2d(dim, dim_out * 4, 1)
-        self.init_conv_(conv)
-
-        self.net = nn.Sequential(conv, nn.SiLU(), nn.PixelShuffle(2))
-
-    def init_conv_(self, conv):
-        o, *rest_shape = conv.weight.shape
-        conv_weight = torch.empty(o // 4, *rest_shape)
-        nn.init.kaiming_uniform_(conv_weight)
-        conv_weight = repeat(conv_weight, "o ... -> (o 4) ...")
-
-        conv.weight.data.copy_(conv_weight)
-        nn.init.zeros_(conv.bias.data)
-
-    def forward(self, x):
-        return self.net(x)
-
-
 def Downsample(dim, dim_out=None):
     return nn.Sequential(
         Rearrange("b c (h p1) (w p2) -> b (c p1 p2) h w", p1=2, p2=2),
@@ -273,13 +201,6 @@ class RMSNorm(nn.Module):
         self.eps = 1e-4
 
     def forward(self, x):
-        # rewrite but with a small epsilon to avoid division by zero
-        # return (
-        #     x
-        #     / (torch.norm(x, dim=1, keepdim=True) + self.eps)
-        #     * self.g
-        #     * (x.shape[1] ** 0.5)
-        # )
         return F.normalize(x, dim=1) * self.g * (x.shape[1] ** 0.5)
 
 
@@ -296,21 +217,13 @@ class Block(nn.Module):
         self.dilation = 1
         self.stride = 1
 
-        # self.proj = nn.Conv2d(dim, dim_out, 3, padding=1)
-        # self.norm = nn.GroupNorm(groups, dim_out)
-        # self.norm = nn.BatchNorm2d(dim_out)
-
         self.act = nn.SiLU()
-        # self.act = nn.LeakyReLU(0.2)
 
     def forward(self, x, conv_mods_iter: Optional[Iterable] = None):
         conv_mods_iter = default(conv_mods_iter, null_iterator())
 
         x = self.proj(x, mod=next(conv_mods_iter), kernel_mod=next(conv_mods_iter))
-        # padding = get_same_padding(x, self.kernel, self.dilation, self.stride)
-        # x = self.proj(x)
 
-        # x = self.norm(x)
         x = self.act(x)
         return x
 
@@ -399,8 +312,6 @@ class Attention(nn.Module):
 
 
 # feedforward
-
-
 def FeedForward(dim, mult=4):
     return nn.Sequential(
         RMSNorm(dim),
@@ -411,8 +322,6 @@ def FeedForward(dim, mult=4):
 
 
 # transformers
-
-
 class Transformer(nn.Module):
     def __init__(self, dim, dim_head=64, heads=8, depth=1, flash_attn=True, ff_mult=4):
         super().__init__()
@@ -461,36 +370,11 @@ class LinearTransformer(nn.Module):
         return x
 
 
-# model
-class AvgPoolDownsample(nn.Module):
-    def __init__(self, dim, dim_out=None):
-        super().__init__()
-        dim_out = default(dim_out, dim)
-        self.conv = nn.Conv2d(dim, dim_out, kernel_size=3, stride=1, padding=1)
-        self.avg_pool = nn.AvgPool2d(kernel_size=2, stride=2)
-        # self.norm = nn.BatchNorm2d(dim_out)
-        # self.act = nn.SiLU()
-
-    def forward(self, x):
-
-        if x.shape[0] >= 64:
-            x = x.contiguous()
-
-        x = self.avg_pool(x)
-        x = self.conv(x)
-        # x = self.norm(x)
-        # x = self.act(x)
-
-        return x
-
-
 class NearestNeighborhoodUpsample(nn.Module):
     def __init__(self, dim, dim_out=None):
         super().__init__()
         dim_out = default(dim_out, dim)
         self.conv = nn.Conv2d(dim, dim_out, kernel_size=3, stride=1, padding=1)
-        # self.norm = nn.BatchNorm2d(dim_out)
-        # self.act = nn.SiLU()
 
     def forward(self, x):
 
@@ -499,33 +383,8 @@ class NearestNeighborhoodUpsample(nn.Module):
 
         x = F.interpolate(x, scale_factor=2.0, mode="nearest")
         x = self.conv(x)
-        # x = self.norm(x)
-        # x = self.act(x)
 
         return x
-
-
-class ASAPDownSample(nn.Module):
-    def __init__(self, dim, dim_out=None):
-        super().__init__()
-        # self.asap = ASAP()
-        self.conv = nn.Conv2d(dim, dim_out, kernel_size=3, stride=1, padding=1)
-        self.asap = ASAP_padding_one()
-        # self.norm = nn.BatchNorm2d(dim_out)
-        # self.act = nn.SiLU()
-
-    def forward(self, x):
-
-        if x.shape[0] >= 64:
-            x = x.contiguous()
-
-        x = self.asap(x)
-        x = self.conv(x)
-        # x = self.norm(x)
-        # x = self.act(x)
-
-        return x
-
 
 class EqualLinear(nn.Module):
     def __init__(self, dim, dim_out, lr_mul=1, bias=True):
@@ -583,18 +442,14 @@ class UnetUpsampler(torch.nn.Module):
         init_dim: Optional[int] = None,
         out_dim: Optional[int] = None,
         style_network: Optional[dict] = None,
-        style_network_dim: Optional[int] = None,
         up_dim_mults: tuple = (1, 2, 4, 8, 16),
         down_dim_mults: tuple = (4, 8, 16),
         channels: int = 3,
         resnet_block_groups: int = 8,
         full_attn: tuple = (False, False, False, True, True),
-        cross_attn: tuple = (False, False, False, False, False),
         flash_attn: bool = True,
         self_attn_dim_head: int = 64,
         self_attn_heads: int = 8,
-        self_attn_dot_product: bool = True,
-        self_attn_ff_mult: int = 4,
         attn_depths: tuple = (2, 2, 2, 2, 4),
         mid_attn_depth: int = 4,
         num_conv_kernels: int = 4,
@@ -776,12 +631,8 @@ class UnetUpsampler(torch.nn.Module):
         lowres_image: torch.Tensor,
         styles: Optional[torch.Tensor] = None,
         noise: Optional[torch.Tensor] = None,
-        texts: Optional[List[str]] = None,
         global_text_tokens: Optional[torch.Tensor] = None,
-        fine_text_tokens: Optional[torch.Tensor] = None,
-        text_mask: Optional[torch.Tensor] = None,
         return_all_rgbs: bool = False,
-        replace_rgb_with_input_lowres_image: bool = True,
     ):
         x = lowres_image
 
