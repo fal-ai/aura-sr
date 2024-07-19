@@ -832,3 +832,81 @@ class AuraSR:
         to_pil = transforms.ToPILImage()
         return to_pil(unpadded)
 
+    # Tiled 4x upscaling with overlapping tiles to reduce seam artifacts
+    @torch.no_grad()
+    def upscale_4x_overlapped(self, image, max_batch_size=8):
+        tensor_transform = transforms.ToTensor()
+        device = self.upsampler.device
+
+        image_tensor = tensor_transform(image).unsqueeze(0)
+        _, _, h, w = image_tensor.shape
+
+        # Calculate paddings
+        pad_h = (
+            self.input_image_size - h % self.input_image_size
+        ) % self.input_image_size
+        pad_w = (
+            self.input_image_size - w % self.input_image_size
+        ) % self.input_image_size
+
+        # Pad the image
+        image_tensor = torch.nn.functional.pad(
+            image_tensor, (0, pad_w, 0, pad_h), mode="reflect"
+        ).squeeze(0)
+
+        # Function to process tiles
+        def process_tiles(tiles, h_chunks, w_chunks):
+            num_tiles = len(tiles)
+            batches = [
+                tiles[i : i + max_batch_size]
+                for i in range(0, num_tiles, max_batch_size)
+            ]
+            reconstructed_tiles = []
+
+            for batch in batches:
+                model_input = torch.stack(batch).to(device)
+                generator_output = self.upsampler(
+                    lowres_image=model_input,
+                    noise=torch.randn(model_input.shape[0], 128, device=device),
+                )
+                reconstructed_tiles.extend(
+                    list(generator_output.clamp_(0, 1).detach().cpu())
+                )
+
+            return merge_tiles(
+                reconstructed_tiles, h_chunks, w_chunks, self.input_image_size * 4
+            )
+
+        # First pass
+        tiles1, h_chunks1, w_chunks1 = tile_image(image_tensor, self.input_image_size)
+        result1 = process_tiles(tiles1, h_chunks1, w_chunks1)
+
+        # Second pass with offset
+        offset = self.input_image_size // 2
+        image_tensor_offset = image_tensor[:, offset:-offset, offset:-offset]
+
+        tiles2, h_chunks2, w_chunks2 = tile_image(
+            image_tensor_offset, self.input_image_size
+        )
+        result2 = process_tiles(tiles2, h_chunks2, w_chunks2)
+
+        # Combine results
+        offset_4x = offset * 4
+        interior_h, interior_w = result2.shape[1], result2.shape[2]
+
+        # Average the overlapping region
+        result1_interior = result1[:, offset_4x:-offset_4x, offset_4x:-offset_4x]
+        averaged_interior = (
+            result1_interior[:, :interior_h, :interior_w] + result2
+        ) / 2
+
+        # Paste the averaged interior back into result1
+        result1[
+            :, offset_4x : offset_4x + interior_h, offset_4x : offset_4x + interior_w
+        ] = averaged_interior
+
+        # Remove padding
+        unpadded = result1[:, : h * 4, : w * 4]
+
+        to_pil = transforms.ToPILImage()
+        return to_pil(unpadded)
