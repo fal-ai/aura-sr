@@ -28,3 +28,7 @@ def load_image_from_url(url):
 image = load_image_from_url("https://mingukkang.github.io/GigaGAN/static/images/iguana_output.jpg").resize((256, 256))
 upscaled_image = aura_sr.upscale_4x(image)
 ```
+
+### Reduce Seam Artifacts 
+
+`upscale_4x` upscales the image in tiles that do not overlap. This can result in seams. Use `upscale_4x_overlapped` to reduce seams. This will double the time upscaling by taking an additional pass and averaging the results. 
