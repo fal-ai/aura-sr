@@ -18,5 +18,8 @@ image = load_image_from_url("https://mingukkang.github.io/GigaGAN/static/images/
 upscaled_image = aura_sr.upscale_4x(image)
 upscaled_image.save(os.path.join("test", "output.png"))
 
-upscaled_image = aura_sr.upscale_4x_overlapped(image)
-upscaled_image.save(os.path.join("test", "output_overlapped.png"))
+upscaled_image = aura_sr.upscale_4x_overlapped(image, weight_type='constant')
+upscaled_image.save(os.path.join("test", "output_overlapped_constant.png"))
+
+upscaled_image = aura_sr.upscale_4x_overlapped(image, weight_type='checkboard')
+upscaled_image.save(os.path.join("test", "output_checkerboard.png"))
