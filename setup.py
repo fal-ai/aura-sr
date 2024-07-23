@@ -3,8 +3,8 @@ from setuptools import setup
 
 setup(
     name="aura-sr",
-    version="0.0.3",
-    description="GAN-based Super-Resolution for AI generated images, a variation of the GigaGAN paper.",
+    version="0.0.4",
+    description="GAN-based Super-Resolution for AI generated images, based on the GigaGAN architecture.",
     py_modules=["aura_sr"],
     install_requires=[
         "torch>=2.0",
