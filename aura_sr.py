@@ -774,7 +774,7 @@ class AuraSR:
         self.input_image_size = config["input_image_size"]
 
     @classmethod
-    def from_pretrained(cls, model_id: str = "fal-ai/AuraSR", use_safetensors: bool = True):
+    def from_pretrained(cls, model_id: str = "fal-ai/AuraSR", use_safetensors: bool = True, device: str = "cuda"):
         import json
         import torch
         from pathlib import Path
@@ -807,7 +807,7 @@ class AuraSR:
             hf_model_path = Path(snapshot_download(model_id))
             config = json.loads((hf_model_path / "config.json").read_text())
 
-        model = cls(config)
+        model = cls(config, device)
 
         if use_safetensors:
             try:
