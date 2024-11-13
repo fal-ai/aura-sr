@@ -221,7 +221,7 @@ class Block(nn.Module):
         self.act = nn.SiLU()
 
     def forward(self, x, conv_mods_iter: Optional[Iterable] = None):
-        conv_mods_iter = default(conv_mods_iter, null_iterator())
+        conv_mods_iter = conv_mods_iter
 
         x = self.proj(x, mod=next(conv_mods_iter), kernel_mod=next(conv_mods_iter))
 
@@ -618,7 +618,7 @@ class UnetUpsampler(torch.nn.Module):
 
     @property
     def device(self):
-        return next(self.parameters()).device
+        return self.style_network.net[0].weight.device
 
     @property
     def total_params(self):
@@ -654,7 +654,7 @@ class UnetUpsampler(torch.nn.Module):
             noise = default(
                 noise,
                 torch.randn(
-                    (batch_size, self.style_network.dim_in), device=self.device
+                    (batch_size, self.style_network.dim_in), device= self.device
                 ),
             )
             styles = self.style_network(noise, global_text_tokens)
@@ -861,7 +861,7 @@ class AuraSR:
     # Tiled 4x upscaling with overlapping tiles to reduce seam artifacts
     # weights options are 'checkboard' and 'constant'
     @torch.no_grad()
-    def upscale_4x_overlapped(self, image, max_batch_size=8, weight_type='checkboard'):
+    def upscale_4x_overlapped(self, image, max_batch_size=16, weight_type='checkboard'):
         tensor_transform = transforms.ToTensor()
         device = self.upsampler.device
 
@@ -916,6 +916,7 @@ class AuraSR:
             image_tensor_offset, self.input_image_size
         )
         result2 = process_tiles(tiles2, h_chunks2, w_chunks2)
+
 
         # unpad 
         offset_4x = offset * 4
